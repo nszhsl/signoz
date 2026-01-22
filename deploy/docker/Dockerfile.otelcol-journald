@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+
+FROM otel/opentelemetry-collector-contrib:0.144.0 AS otelbin
+
+FROM debian:bookworm-slim
+
+# journalctl comes from systemd package
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends systemd ca-certificates tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+# copy otelcol-contrib binary
+COPY --from=otelbin /otelcol-contrib /otelcol-contrib
+
+# run as root (journald access usually needs root or systemd-journal group)
+USER 0
+
+ENTRYPOINT ["/otelcol-contrib"]
