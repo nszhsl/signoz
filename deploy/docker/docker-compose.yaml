@@ -185,6 +185,79 @@ services:
       - --dsn=tcp://clickhouse:9000
       - --up=
     restart: on-failure
+  otelcol-agent:
+    image: otel/opentelemetry-collector-contrib:latest
+    privileged: true
+    restart: unless-stopped
+    networks:
+      - signoz-net
+    depends_on:
+      otel-collector:
+        condition: service_started
+    entrypoint: ["/bin/sh","-lc"]
+    command: |
+      cat > /etc/otelcol-agent.yaml <<'YAML'
+      receivers:
+        filelog/traefik:
+          include:
+            - /etc/dokploy/traefik/dynamic/access.log
+          start_at: end
+          operators:
+            - type: json_parser
+              parse_from: body
+
+        journald:
+          directory: /run/log/journal
+
+      processors:
+        attributes/traefik:
+          actions:
+            - key: service.name
+              value: traefik
+              action: upsert
+        attributes/openvpn:
+          actions:
+            - key: service.name
+              value: openvpn
+              action: upsert
+
+        transform/traefik_fields:
+          error_mode: ignore
+          log_statements:
+            - context: log
+              statements:
+                - set(attributes["host"], body["RequestHost"]) where body["RequestHost"] != nil
+                - set(attributes["path"], body["RequestPath"]) where body["RequestPath"] != nil
+                - set(attributes["status"], body["DownstreamStatus"]) where body["DownstreamStatus"] != nil
+                - set(attributes["client_ip"], body["ClientHost"]) where body["ClientHost"] != nil
+                - set(attributes["client_ip"], replace_pattern(body["ClientAddr"], ":.*$", "")) where body["ClientHost"] == nil and body["ClientAddr"] != nil
+                - set(attributes["duration_ms"], double(body["Duration"]) / 1000000.0) where body["Duration"] != nil
+
+        batch: {}
+
+      exporters:
+        otlp:
+          endpoint: otel-collector:4317
+          tls:
+            insecure: true
+
+      service:
+        pipelines:
+          logs/traefik:
+            receivers: [filelog/traefik]
+            processors: [attributes/traefik, transform/traefik_fields, batch]
+            exporters: [otlp]
+          logs/openvpn:
+            receivers: [journald]
+            processors: [attributes/openvpn, batch]
+            exporters: [otlp]
+      YAML
+      exec /otelcol-contrib --config=/etc/otelcol-agent.yaml
+    volumes:
+      - /etc/dokploy/traefik/dynamic/access.log:/etc/dokploy/traefik/dynamic/access.log:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /var/log/journal:/var/log/journal:ro
+
 networks:
   signoz-net:
     name: signoz-net
