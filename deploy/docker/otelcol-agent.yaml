@@ -12,6 +12,36 @@ receivers:
   journald:
     directory: /var/log/journal
 
+  filelog/gitssh:
+    include:
+      - /var/lib/docker/containers/*/*.log
+    start_at: end
+    include_file_path: true
+    operators:
+      # Docker json-file: {"log":"xxx\n","time":"..."}
+      - type: json_parser
+        parse_from: body
+
+      # 只保留 Forgejo SSH 相关日志
+      - type: filter
+        expr: >
+          attributes.log matches "(?i)(ssh|publickey|git@|connection from|accepted|failed password)"
+
+      # 把真正的日志内容移到 body
+      - type: move
+        from: attributes.log
+        to: body
+
+      # 去掉末尾换行
+      - type: regex_parser
+        parse_from: body
+        regex: '^(?P<msg>.*?)(\n)?$'
+      - type: move
+        from: attributes.msg
+        to: body
+      - type: remove
+        field: attributes.msg
+
 processors:
   attributes/traefik:
     actions:
@@ -39,6 +69,13 @@ processors:
           - set(attributes["upstream_service"], attributes["ServiceName"]) where attributes["ServiceName"] != nil
           - set(attributes["duration_ns"], attributes["Duration"]) where attributes["Duration"] != nil
 
+  attributes/mark_gitssh:
+    actions:
+      - key: service.name
+        value: git-ssh
+        action: upsert
+
+
   batch: {}
 
 exporters:
@@ -59,3 +96,8 @@ service:
       receivers: [journald]
       processors: [attributes/openvpn, batch]
       exporters: [otlp]
+      
+    logs/gitssh:
+      receivers: [filelog/gitssh]
+      processors: [attributes/mark_gitssh, batch]
+      exporters: [otlp]      
