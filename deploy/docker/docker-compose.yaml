@@ -186,7 +186,10 @@ services:
       - --up=
     restart: on-failure
   otelcol-agent:
-    image: otel/opentelemetry-collector-contrib:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.otelcol-journald
+    image: yizhisec/otelcol-journald:0.144.0
     privileged: true
     restart: unless-stopped
     networks:
@@ -198,9 +201,15 @@ services:
       - "--config=/etc/otelcol-agent.yaml"
     volumes:
       - ./otelcol-agent.yaml:/etc/otelcol-agent.yaml:ro
+
+      # Traefik access log
       - /etc/dokploy/traefik/dynamic/access.log:/etc/dokploy/traefik/dynamic/access.log:ro
+
+      # Journald (host)
       - /run/log/journal:/run/log/journal:ro
       - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+
 
 
 networks:
