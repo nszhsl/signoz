@@ -4,15 +4,13 @@ receivers:
       - /etc/dokploy/traefik/dynamic/access.log
     start_at: end
     operators:
+      # 把 Traefik JSON 行解析到 attributes，而不是 body
       - type: json_parser
         parse_from: body
+        parse_to: attributes
 
   journald:
-    # 你机器上 /var/log/journal 存在（持久化），更稳
     directory: /var/log/journal
-    # 可选：只采 openvpn，减少噪音（后面你想加再加）
-    # units:
-    #   - openvpn-server@server.service
 
 processors:
   attributes/traefik:
@@ -32,18 +30,19 @@ processors:
     log_statements:
       - context: log
         statements:
-          - set(attributes["host"], body["RequestHost"]) where body["RequestHost"] != nil
-          - set(attributes["path"], body["RequestPath"]) where body["RequestPath"] != nil
-          - set(attributes["method"], body["RequestMethod"]) where body["RequestMethod"] != nil
-          - set(attributes["status"], body["DownstreamStatus"]) where body["DownstreamStatus"] != nil
-          - set(attributes["client_ip"], body["ClientHost"]) where body["ClientHost"] != nil
-          - set(attributes["router"], body["RouterName"]) where body["RouterName"] != nil
-          - set(attributes["upstream_service"], body["ServiceName"]) where body["ServiceName"] != nil
-          - set(attributes["duration_ns"], body["Duration"]) where body["Duration"] != nil
+          - set(attributes["host"], attributes["RequestHost"]) where attributes["RequestHost"] != nil
+          - set(attributes["path"], attributes["RequestPath"]) where attributes["RequestPath"] != nil
+          - set(attributes["method"], attributes["RequestMethod"]) where attributes["RequestMethod"] != nil
+          - set(attributes["status"], attributes["DownstreamStatus"]) where attributes["DownstreamStatus"] != nil
+          - set(attributes["client_ip"], attributes["ClientHost"]) where attributes["ClientHost"] != nil
+          - set(attributes["router"], attributes["RouterName"]) where attributes["RouterName"] != nil
+          - set(attributes["upstream_service"], attributes["ServiceName"]) where attributes["ServiceName"] != nil
+          - set(attributes["duration_ns"], attributes["Duration"]) where attributes["Duration"] != nil
 
   batch: {}
 
 exporters:
+  # 你这里的 exporter 写法没问题；只是提醒：0.144 里 otlp alias 会提示弃用
   otlp:
     endpoint: otel-collector:4317
     tls:
