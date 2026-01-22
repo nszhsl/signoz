@@ -1,33 +1,42 @@
 receivers:
+  # ---- Traefik access log (JSON file) ----
   filelog/traefik:
     include:
       - /etc/dokploy/traefik/dynamic/access.log
     start_at: end
     operators:
-      # 把 Traefik JSON 行解析到 attributes，而不是 body
       - type: json_parser
         parse_from: body
         parse_to: attributes
 
-  journald:
+  # ---- Host SSHD only ----
+  journald/sshd:
     directory: /var/log/journal
+    units:
+      - ssh.service
+      - sshd.service
 
+  # ---- OpenVPN only ----
+  journald/openvpn:
+    directory: /var/log/journal
+    units:
+      - openvpn-server@server.service
+
+  # ---- Git SSH (2222 -> forgejo:22) ----
+  # Read docker json-file logs; filter by SSH-ish keywords.
   filelog/gitssh:
     include:
       - /var/lib/docker/containers/*/*.log
     start_at: end
     include_file_path: true
     operators:
-      # Docker json-file: {"log":"xxx\n","time":"..."}
       - type: json_parser
         parse_from: body
 
-      # 只保留 Forgejo SSH 相关日志
+      # 过滤出“疑似 SSH/Git SSH”相关日志（适配面最广）
       - type: filter
-        expr: >
-          attributes.log matches "(?i)(ssh|publickey|git@|connection from|accepted|failed password)"
+        expr: 'attributes["log"] matches "(?i)(ssh|publickey|git@|connection from|accepted|failed password|authentication failure|invalid user)"'
 
-      # 把真正的日志内容移到 body
       - type: move
         from: attributes.log
         to: body
@@ -43,18 +52,32 @@ receivers:
         field: attributes.msg
 
 processors:
-  attributes/traefik:
+  # ---- mark service names ----
+  attributes/mark_traefik:
     actions:
       - key: service.name
         value: traefik
         action: upsert
 
-  attributes/openvpn:
+  attributes/mark_sshd:
+    actions:
+      - key: service.name
+        value: sshd
+        action: upsert
+
+  attributes/mark_openvpn:
     actions:
       - key: service.name
         value: openvpn
         action: upsert
 
+  attributes/mark_gitssh:
+    actions:
+      - key: service.name
+        value: git-ssh
+        action: upsert
+
+  # ---- Traefik field extraction (from attributes) ----
   transform/traefik_fields:
     error_mode: ignore
     log_statements:
@@ -69,17 +92,10 @@ processors:
           - set(attributes["upstream_service"], attributes["ServiceName"]) where attributes["ServiceName"] != nil
           - set(attributes["duration_ns"], attributes["Duration"]) where attributes["Duration"] != nil
 
-  attributes/mark_gitssh:
-    actions:
-      - key: service.name
-        value: git-ssh
-        action: upsert
-
-
   batch: {}
 
 exporters:
-  # 你这里的 exporter 写法没问题；只是提醒：0.144 里 otlp alias 会提示弃用
+  # 你现有 SigNoz collector 在同网络内（service 名 otel-collector）
   otlp:
     endpoint: otel-collector:4317
     tls:
@@ -89,15 +105,20 @@ service:
   pipelines:
     logs/traefik:
       receivers: [filelog/traefik]
-      processors: [attributes/traefik, transform/traefik_fields, batch]
+      processors: [attributes/mark_traefik, transform/traefik_fields, batch]
+      exporters: [otlp]
+
+    logs/sshd:
+      receivers: [journald/sshd]
+      processors: [attributes/mark_sshd, batch]
       exporters: [otlp]
 
     logs/openvpn:
-      receivers: [journald]
-      processors: [attributes/openvpn, batch]
+      receivers: [journald/openvpn]
+      processors: [attributes/mark_openvpn, batch]
       exporters: [otlp]
-      
+
     logs/gitssh:
       receivers: [filelog/gitssh]
       processors: [attributes/mark_gitssh, batch]
-      exporters: [otlp]      
+      exporters: [otlp]
